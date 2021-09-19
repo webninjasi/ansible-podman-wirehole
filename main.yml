@@ -1,0 +1,126 @@
+---
+- name: Install dependencies and configure the system
+  hosts: all
+  become: true
+  tasks:
+  - name: Install podman
+    ansible.builtin.dnf:
+      name: '@container-tools:ol8'
+      state: present
+  - name: Enable wireguard kernel module
+    community.general.modprobe:
+      name: wireguard
+      state: present
+  - name: Enable wireguard port
+    ansible.posix.firewalld:
+      port: 51820/udp
+      zone: public
+      permanent: yes
+      state: enabled
+
+- name: Setup wirehole
+  hosts: all
+  tasks:
+  - name: Create wireguard config dir
+    ansible.builtin.file:
+      path: ~/wirehole/wireguard/config
+      state: directory
+  
+  - name: Create wirehole network
+    containers.podman.podman_network:
+      name: cni-wirehole
+      subnet: 10.2.0.0/24
+  
+  - name: Create pihole volume
+    containers.podman.podman_volume:
+      state: present
+      name: pihole
+  - name: Create dnsmasq volume
+    containers.podman.podman_volume:
+      state: present
+      name: dnsmasq
+  
+  - name: Create unbound container
+    containers.podman.podman_container:
+      name: unbound
+      image: klutchell/unbound
+      state: started
+      force_restart: "yes"
+      restart_policy: "always"
+      network: "cni-wirehole"
+      ip: "10.2.0.200"
+  - name: Create pihole container
+    containers.podman.podman_container:
+      name: pihole
+      image: pihole/pihole:latest
+      state: started
+      force_restart: "yes"
+      cap_add:
+        - NET_ADMIN
+      restart_policy: "always"
+      network: "cni-wirehole"
+      ip: "10.2.0.100"
+      volume:
+        - "pihole:/etc/pihole:Z"
+        - "dnsmasqd:/etc/dnsmasq.d:Z"
+      dns:
+        - "127.0.0.1"
+        - "10.2.0.200"
+      env:
+        TZ: "Europe/Berlin"
+        ServerIP: "10.2.0.100"
+        WEBPASSWORD: "{{ lookup('password', 'credentials/pihole length=15') }}"
+        DNS1: "10.2.0.200#5053"
+        DNS2: "10.2.0.200#5053"
+  - name: Create wireguard container
+    containers.podman.podman_container:
+      name: wireguard
+      image: linuxserver/wireguard
+      state: started
+      force_restart: "yes"
+      cap_add:
+        - NET_ADMIN
+        - NET_RAW
+        - SYS_MODULE
+      sysctl:
+        net.ipv4.conf.all.src_valid_mark: 1
+      restart_policy: "always"
+      publish:
+        - "51820:51820/udp"
+      network: "cni-wirehole"
+      ip: "10.2.0.5"
+      volume:
+        - "./wirehole/wireguard/config:/config:Z"
+        - "/lib/modules:/lib/modules"
+      dns:
+        - "10.2.0.100"
+        - "10.2.0.200"
+      env:
+        TZ: "Europe/Berlin"
+        PUID: "0"
+        PGID: "0"
+        PEERS: "10"
+        PEERDNS: "10.2.0.100"
+  - name: Wait for Wireguard to generate peer configs 
+    pause:
+      seconds: 15
+
+- name: Fetch the config files
+  hosts: all
+  tasks:
+  - name: Download peer configs to local
+    synchronize:
+      src: "{{ item }}"
+      dest: peers
+      mode: pull
+    with_items:
+      - "~/wirehole/wireguard/config/peer1"
+      - "~/wirehole/wireguard/config/peer2"
+      - "~/wirehole/wireguard/config/peer3"
+      - "~/wirehole/wireguard/config/peer4"
+      - "~/wirehole/wireguard/config/peer5"
+      - "~/wirehole/wireguard/config/peer6"
+      - "~/wirehole/wireguard/config/peer7"
+      - "~/wirehole/wireguard/config/peer8"
+      - "~/wirehole/wireguard/config/peer9"
+      - "~/wirehole/wireguard/config/peer10"
